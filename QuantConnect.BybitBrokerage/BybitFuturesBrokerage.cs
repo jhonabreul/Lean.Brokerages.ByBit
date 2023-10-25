@@ -30,11 +30,6 @@ namespace QuantConnect.BybitBrokerage
     public class BybitFuturesBrokerage : BybitBrokerage
     {
         /// <summary>
-        /// Account category
-        /// </summary>
-        protected override BybitProductCategory Category => BybitProductCategory.Linear;
-
-        /// <summary>
         /// Parameterless constructor for brokerage
         /// </summary>
         public BybitFuturesBrokerage() : this(Market.Bybit)
@@ -86,15 +81,6 @@ namespace QuantConnect.BybitBrokerage
             BybitVIPLevel vipLevel = BybitVIPLevel.VIP0) : base(apiKey, apiSecret, restApiUrl,
             webSocketBaseUrl, algorithm, aggregator, job, vipLevel)
         {
-        }
-
-
-        /// <summary>
-        /// Gets the supported security type by the brokerage
-        /// </summary>
-        protected override SecurityType GetSupportedSecurityType()
-        {
-            return SecurityType.CryptoFuture;
         }
 
         /// <summary>

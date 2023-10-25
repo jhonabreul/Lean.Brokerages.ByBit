@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using QuantConnect.Brokerages;
 using QuantConnect.BybitBrokerage.Models;
 using QuantConnect.BybitBrokerage.Models.Enums;
@@ -103,15 +104,25 @@ public class BybitTradeApiEndpoint : BybitApiEndpoint
     /// <returns>A enumerable of orders</returns>
     public IEnumerable<BybitOrder> GetOpenOrders(BybitProductCategory category)
     {
+        // TODO: Can we use GetOpenOrdersAsync?
+        return GetOpenOrders(category);
+    }
+
+    /// <summary>
+    /// Query unfilled or partially filled orders in real-time. To query older order records, please use the order history interface.
+    /// </summary>
+    /// <param name="category">The product category</param>
+    /// <returns>A enumerable of orders</returns>
+    public IAsyncEnumerable<BybitOrder> GetOpenOrdersAsync(BybitProductCategory category)
+    {
         var parameters = new Dictionary<string, string>();
         if (category == BybitProductCategory.Linear)
         {
             parameters["settleCoin"] = "USDT";
         }
 
-        return FetchAll<BybitOrder>("/order/realtime", category, 50, parameters, true);
+        return FetchAllAsync<BybitOrder>("/order/realtime", category, 50, parameters, true);
     }
-
 
     private ByBitPlaceOrderRequest CreateRequest(BybitProductCategory category, Order order)
     {
@@ -151,7 +162,7 @@ public class BybitTradeApiEndpoint : BybitApiEndpoint
                 {
                     var price = GetTickerPrice(category, order);
                     // Spot market buy orders require price in quote currency
-                    req.Quantity *= price; 
+                    req.Quantity *= price;
                 }
 
                 break;

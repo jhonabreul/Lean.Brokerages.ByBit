@@ -98,20 +98,4 @@ public partial class BybitBrokerage
             vipLevel
         );
     }
-
-    private string GetOrderBookDepthConfigName()
-    {
-        switch (Category)
-        {
-            case BybitProductCategory.Spot:
-                return "bybit-orderbook-depth";
-            case BybitProductCategory.Linear:
-            case BybitProductCategory.Inverse:
-                return "bybit-futures-orderbook-depth";
-            case BybitProductCategory.Option:
-                return "bybit-options-orderbook-depth";
-            default:
-                throw new ArgumentOutOfRangeException();
-        }
-    }
 }

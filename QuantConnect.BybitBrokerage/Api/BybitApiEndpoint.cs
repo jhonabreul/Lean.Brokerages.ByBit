@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Serialization;
@@ -107,8 +108,7 @@ public abstract class BybitApiEndpoint
 
         do
         {
-            var result = ExecuteGetRequest<BybitPageResult<T>>(endpoint, category, parameterDict.OrderBy(x => x.Key),
-                authenticate);
+            var result = ExecuteGetRequest<BybitPageResult<T>>(endpoint, category, parameterDict.OrderBy(x => x.Key), authenticate);
 
             foreach (var data in result.List)
             {
@@ -116,9 +116,66 @@ public abstract class BybitApiEndpoint
             }
 
             var nextCursor = result.NextPageCursor;
-            // Break when the cursor is either empty or the same as the one we just processed 
-            if (string.IsNullOrEmpty(nextCursor) || (parameterDict.TryGetValue("cursor", out var previousCursor) &&
-                                                     previousCursor == nextCursor))
+            // Break when the cursor is either empty or the same as the one we just processed
+            if (string.IsNullOrEmpty(nextCursor) || (parameterDict.TryGetValue("cursor", out var previousCursor) && previousCursor == nextCursor))
+            {
+                break;
+            }
+
+            parameterDict["cursor"] = nextCursor;
+        } while (true);
+    }
+    //[StackTraceHidden]
+    //protected IEnumerable<T> FetchAll<T>(string endpoint, BybitProductCategory category, int limit,
+    //    IEnumerable<KeyValuePair<string, string>> parameters = null, bool authenticate = false)
+    //{
+    //    return FetchAllImpl<T>(endpoint, category, limit, parameters, authenticate).SynchronouslyAwaitTaskResult();
+    //}
+
+    //[StackTraceHidden]
+    //private async Task<IEnumerable<T>> FetchAllImpl<T>(string endpoint, BybitProductCategory category, int limit,
+    //    IEnumerable<KeyValuePair<string, string>> parameters = null, bool authenticate = false)
+    //{
+    //    var dataList = new List<T>();
+    //    await foreach (var data in FetchAllAsync<T>(endpoint, category, limit, parameters, authenticate))
+    //    {
+    //        dataList.Add(data);
+    //    }
+
+    //    return dataList;
+    //}
+
+    /// <summary>
+    /// Asynchronously fetches all results from a paginated GET endpoint
+    /// </summary>
+    /// <param name="endpoint">The endpoint</param>
+    /// <param name="category">Optional product category which is added to the request</param>
+    /// <param name="limit">The max number of elements the api can return for this request</param>
+    /// <param name="parameters">Optional parameters which should be added to the request</param>
+    /// <param name="authenticate">Whether the request should be authenticated</param>
+    /// <typeparam name="T">The business data type of the response</typeparam>
+    /// <returns>An enumerable of the business data returned from the api</returns>
+    [StackTraceHidden]
+    protected async IAsyncEnumerable<T> FetchAllAsync<T>(string endpoint, BybitProductCategory category, int limit,
+        IEnumerable<KeyValuePair<string, string>> parameters = null, bool authenticate = false)
+    {
+        var parameterDict = parameters == null
+            ? new Dictionary<string, string>()
+            : new Dictionary<string, string>(parameters);
+        parameterDict["limit"] = limit.ToStringInvariant();
+
+        do
+        {
+            var result = await ExecuteGetRequestAsync<BybitPageResult<T>>(endpoint, category, parameterDict.OrderBy(x => x.Key), authenticate);
+
+            foreach (var data in result.List)
+            {
+                yield return data;
+            }
+
+            var nextCursor = result.NextPageCursor;
+            // Break when the cursor is either empty or the same as the one we just processed
+            if (string.IsNullOrEmpty(nextCursor) || (parameterDict.TryGetValue("cursor", out var previousCursor) && previousCursor == nextCursor))
             {
                 break;
             }
@@ -140,6 +197,24 @@ public abstract class BybitApiEndpoint
     protected T ExecuteGetRequest<T>(string endpoint, BybitProductCategory? category = null,
         IEnumerable<KeyValuePair<string, string>> parameters = null, bool authenticate = false)
     {
+        // TODO: Running an async task synchronously should be handled better, since this could lead to deadlocks.
+        //       See how RestSharp handles it: https://github.com/restsharp/RestSharp/blob/d99d49437af21688152b556f6d3661d2e739b824/src/RestSharp/AsyncHelpers.cs#L27
+        return ExecuteGetRequestAsync<T>(endpoint, category, parameters, authenticate).SynchronouslyAwaitTaskResult();
+    }
+
+    /// <summary>
+    /// Creates a GET request, authenticates, and executes it and parses the response asynchronously
+    /// </summary>
+    /// <param name="endpoint">The endpoint</param>
+    /// <param name="category">Optional product category which is added to the request</param>
+    /// <param name="parameters">Optional parameters which should be added to the request</param>
+    /// <param name="authenticate">Whether the request should be authenticated</param>
+    /// <typeparam name="T">The business data type of the response</typeparam>
+    /// <returns>The business data of the response</returns>
+    [StackTraceHidden]
+    protected async Task<T> ExecuteGetRequestAsync<T>(string endpoint, BybitProductCategory? category = null,
+        IEnumerable<KeyValuePair<string, string>> parameters = null, bool authenticate = false)
+    {
         var request = new RestRequest($"{_apiPrefix}{endpoint}");
 
         if (category.HasValue)
@@ -157,7 +232,7 @@ public abstract class BybitApiEndpoint
             }
         }
 
-        var response = ExecuteRequest(request, authenticate);
+        var response = await ExecuteRequestAsync(request, authenticate);
 
         return EnsureSuccessAndParse<T>(response);
     }
@@ -236,11 +311,25 @@ public abstract class BybitApiEndpoint
     [StackTraceHidden]
     private IRestResponse ExecuteRequest(IRestRequest request, bool authenticate = false)
     {
+        // TODO: Running an async task synchronously should be handled better, since this could lead to deadlocks.
+        //       See how RestSharp handles it: https://github.com/restsharp/RestSharp/blob/d99d49437af21688152b556f6d3661d2e739b824/src/RestSharp/AsyncHelpers.cs#L27
+        return ExecuteRequestAsync(request, authenticate).SynchronouslyAwaitTaskResult();
+    }
+
+    /// <summary>
+    /// Executes the rest request asynchronously
+    /// </summary>
+    /// <param name="request">The rest request to execute</param>
+    /// <param name="authenticate">If the request should be authenticated</param>
+    /// <returns>The rest response</returns>
+    [StackTraceHidden]
+    private async Task<IRestResponse> ExecuteRequestAsync(IRestRequest request, bool authenticate = false)
+    {
         if (authenticate)
         {
             _apiClient.AuthenticateRequest(request);
         }
 
-        return _apiClient.ExecuteRequest(request);
+        return await _apiClient.ExecuteRequestAsync(request);
     }
 }

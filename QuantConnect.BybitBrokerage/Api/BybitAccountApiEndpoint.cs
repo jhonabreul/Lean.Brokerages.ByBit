@@ -44,15 +44,14 @@ public class BybitAccountApiEndpoint : BybitApiEndpoint
     /// </summary>
     /// <param name="category">The product category</param>
     /// <returns>The wallet balances</returns>
-    public BybitBalance GetWalletBalances(BybitProductCategory category)
+    public BybitBalance GetWalletBalances()
     {
         var parameters = new KeyValuePair<string, string>[]
         {
             new("accountType", "UNIFIED")
         };
 
-        var result =
-            ExecuteGetRequest<BybitPageResult<BybitBalance>>("/account/wallet-balance", category, parameters, true);
+        var result = ExecuteGetRequest<BybitPageResult<BybitBalance>>("/account/wallet-balance", null, parameters, true);
 
         return result.List[0];
     }

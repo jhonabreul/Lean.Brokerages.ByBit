@@ -19,7 +19,7 @@ using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using System.Web;
+using System.Threading.Tasks;
 using QuantConnect.Util;
 using RestSharp;
 
@@ -36,7 +36,7 @@ public class BybitApiClient : IDisposable
     private readonly RateGate _rateGate;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="BybitApiClient"/> class 
+    /// Initializes a new instance of the <see cref="BybitApiClient"/> class
     /// </summary>
     /// <param name="apiKey">The api key</param>
     /// <param name="apiSecret">The api secret</param>
@@ -104,8 +104,21 @@ public class BybitApiClient : IDisposable
     [StackTraceHidden]
     public IRestResponse ExecuteRequest(IRestRequest request)
     {
+        // TODO: Running an async task synchronously should be handled better, since this could lead to deadlocks.
+        //       See how RestSharp handles it: https://github.com/restsharp/RestSharp/blob/d99d49437af21688152b556f6d3661d2e739b824/src/RestSharp/AsyncHelpers.cs#L27
+        return ExecuteRequestAsync(request).SynchronouslyAwaitTaskResult();
+    }
+
+    /// <summary>
+    /// Executes the rest request
+    /// </summary>
+    /// <param name="request">The rest request to execute</param>
+    /// <returns>The rest response</returns>
+    [StackTraceHidden]
+    public async Task<IRestResponse> ExecuteRequestAsync(IRestRequest request)
+    {
         _rateGate.WaitToProceed();
-        return _restClient.Execute(request);
+        return await _restClient.ExecuteAsync(request);
     }
 
     /// <summary>

@@ -38,6 +38,9 @@ using QuantConnect.Util;
 using RestSharp;
 using HistoryRequest = QuantConnect.Data.HistoryRequest;
 using OrderStatus = QuantConnect.Orders.OrderStatus;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+using QuantConnect.BybitBrokerage.Models;
 
 namespace QuantConnect.BybitBrokerage;
 
@@ -49,24 +52,27 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
 {
     private static int MaxSymbolsPerWebsocketConnection => Config.GetInt("bybit-maximum-websocket-connections",128);
     private static int MaxWebsocketConnections => Config.GetInt("bybit-maximum-symbols-per-connection",16);
-    
+
+    private static List<BybitProductCategory> SupportedBybitProductCategories => new() { BybitProductCategory.Spot, BybitProductCategory.Linear};
+
+    private static List<SecurityType> SuppotedSecurityTypes => new() { SecurityType.Crypto, SecurityType.CryptoFuture };
+
+    private Dictionary<BybitProductCategory, BrokerageMultiWebSocketSubscriptionManager> _subscriptionManagers => new();
+
     private IAlgorithm _algorithm;
     private SymbolPropertiesDatabaseSymbolMapper _symbolMapper;
     private LiveNodePacket _job;
     private string _privateWebSocketUrl;
     private Lazy<BybitApi> _apiClientLazy;
-
     private BrokerageConcurrentMessageHandler<WebSocketMessage> _messageHandler;
-    
-    
 
     /// <summary>
     /// Brokerage market name
     /// </summary>
-    protected string MarketName { get; set; }
+    protected string MarketName { get; private set; }
 
     /// <summary>
-    /// Order provider 
+    /// Order provider
     /// </summary>
     protected IOrderProvider OrderProvider { get; private set; }
 
@@ -74,13 +80,6 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
     /// Api client instance
     /// </summary>
     protected BybitApi ApiClient => _apiClientLazy?.Value;
-
-    /// <summary>
-    /// Account category
-    /// </summary>
-    protected virtual BybitProductCategory Category => BybitProductCategory.Spot;
-
-   
 
     /// <summary>
     /// Returns true if we're currently connected to the broker
@@ -100,7 +99,6 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
     public BybitBrokerage(string marketName) : base(marketName)
     {
     }
-
 
     /// <summary>
     /// Constructor for brokerage
@@ -184,8 +182,8 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
             return Array.Empty<BaseData>();
         }
 
-       
-        if (request.Symbol.SecurityType != GetSupportedSecurityType())
+
+        if (!IsSupported(request.Symbol))
         {
             OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Warning, "InvalidSecurityType",
                 $"{request.Symbol.SecurityType} security type not supported, no history returned"));
@@ -198,7 +196,7 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
         {
             return GetOpenInterestHistory(brokerageSymbol, request);
         }
-        
+
         if (request.Resolution == Resolution.Tick)
         {
             return GetTickHistory(brokerageSymbol, request);
@@ -232,7 +230,7 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
         }
 
         _privateWebSocketUrl = $"{baseWssUrl}/v5/private";
-        var publicWssUrl = $"{baseWssUrl}/v5/public/{Category.ToStringInvariant().ToLowerInvariant()}";
+        var basePublicWebSocketUrl = $"{baseWssUrl}/v5/public";
 
         base.Initialize(_privateWebSocketUrl, new BybitWebSocketWrapper(), null, apiKey, apiSecret);
 
@@ -244,40 +242,57 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
         OrderProvider = orderProvider;
         MarketName = marketName;
 
-        var weights = new Dictionary<Symbol, int>();
         using (var tempClient = GetApiClient(_symbolMapper, securityProvider, restApiUrl, apiKey, apiSecret, vipLevel))
         {
-            foreach (var ticker in tempClient.Market.GetTickers(Category))
+            var tasks = new Dictionary<BybitProductCategory, Task<BybitTicker[]>>();
+            foreach (var category in SupportedBybitProductCategories)
             {
-                Symbol leanSymbol;
-                try
+                async Task<BybitTicker[]> fetchCategoryTickers()
                 {
-                    leanSymbol = _symbolMapper.GetLeanSymbol(ticker.Symbol, GetSupportedSecurityType(), MarketName);
+                    return await tempClient.Market.GetTickersAsync(category);
                 }
-                catch (Exception)
+                tasks.Add(category, fetchCategoryTickers());
+            }
+
+            Task.WhenAll(tasks.Values).Wait();
+
+            foreach (var kvp in tasks)
+            {
+                var category = kvp.Key;
+                var tickers = kvp.Value.Result;
+                var weights = new Dictionary<Symbol, int>();
+                foreach (var ticker in tickers)
                 {
-                    //The api returns some currently unsupported symbols we can ignore these right now
-                    continue;
+                    Symbol leanSymbol;
+                    try
+                    {
+                        leanSymbol = _symbolMapper.GetLeanSymbol(ticker.Symbol, GetSecurityType(category), MarketName);
+                    }
+                    catch (Exception)
+                    {
+                        //The api returns some currently unsupported symbols we can ignore these right now
+                        continue;
+                    }
+
+                    var weight = ticker.Turnover24Hours.HasValue && ticker.Turnover24Hours > int.MaxValue
+                        ? int.MaxValue
+                        : decimal.ToInt32(ticker.Turnover24Hours.Value);
+                    weights.Add(leanSymbol, weight);
                 }
 
-                var weight = (ticker.Turnover24Hours > int.MaxValue)
-                    ? int.MaxValue
-                    : decimal.ToInt32(ticker.Turnover24Hours ?? 0);
-                
-                weights.Add(leanSymbol,weight);
+                var websocketUrl = basePublicWebSocketUrl + $"/{category.ToStringInvariant().ToLowerInvariant()}";
+                var subscriptionManager = new BrokerageMultiWebSocketSubscriptionManager(websocketUrl,
+                    MaxSymbolsPerWebsocketConnection,
+                    MaxWebsocketConnections,
+                    weights,
+                    () => new BybitWebSocketWrapper(),
+                    Subscribe,
+                    Unsubscribe,
+                    OnDataMessage,
+                    TimeSpan.FromDays(1));
+                _subscriptionManagers[category] = subscriptionManager;
             }
         }
-        
-        var subscriptionManager = new BrokerageMultiWebSocketSubscriptionManager(publicWssUrl,
-            MaxSymbolsPerWebsocketConnection,
-            MaxWebsocketConnections,
-            weights,
-            () => new BybitWebSocketWrapper(),
-            Subscribe,
-            Unsubscribe,
-            OnDataMessage,
-            TimeSpan.FromDays(1));
-        SubscriptionManager = subscriptionManager;
 
         // can be null, if BybitBrokerage is used as DataQueueHandler only
         if (_algorithm != null)
@@ -313,18 +328,58 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
     protected virtual bool CanSubscribe(Symbol symbol)
     {
         return !symbol.Value.Contains("UNIVERSE") &&
-               symbol.SecurityType == GetSupportedSecurityType() &&
+               IsSupported(symbol) &&
                symbol.ID.Market == MarketName;
     }
 
     /// <summary>
-    /// Gets the supported security type by the brokerage
+    /// Checks whether the specified symbol is supported by this brokerage by its security type
     /// </summary>
-    protected virtual SecurityType GetSupportedSecurityType()
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected bool IsSupported(Symbol symbol)
     {
-        return SecurityType.Crypto;
+        return SuppotedSecurityTypes.Contains(symbol.SecurityType);
     }
 
+    /// <summary>
+    /// Gets the corresponding Lean security type for the specified Bybit product category
+    /// </summary>
+    protected SecurityType GetSecurityType(BybitProductCategory bybitProductCategory) => bybitProductCategory switch
+    {
+        BybitProductCategory.Spot => SecurityType.Crypto,
+        BybitProductCategory.Linear or BybitProductCategory.Inverse => SecurityType.CryptoFuture,
+        _ => throw new ArgumentOutOfRangeException(nameof(bybitProductCategory), bybitProductCategory, "Not supported Bybit product category")
+    };
+
+    /// <summary>
+    /// Gets the corresponding Bybit product category for the specified Lean symbol
+    /// </summary>
+    protected BybitProductCategory GetBybitProductCategory(Symbol symbol)
+    {
+        switch (symbol.SecurityType)
+        {
+            case SecurityType.Crypto:
+                return BybitProductCategory.Spot;
+
+            case SecurityType.CryptoFuture:
+                if (!CurrencyPairUtil.TryDecomposeCurrencyPair(symbol, out _, out var quoteCurrency))
+                {
+                    throw new ArgumentException($"Invalid symbol: {symbol}");
+                }
+
+                if (quoteCurrency == "USD")
+                {
+                    return BybitProductCategory.Inverse;
+                }
+                else
+                {
+                    return BybitProductCategory.Linear;
+                }
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(symbol), symbol, "Not supported security type");
+        }
+    }
 
     /// <summary>
     /// Not used
@@ -362,7 +417,7 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
     private IEnumerable<Tick> GetTickHistory(string brokerageSymbol, HistoryRequest request)
     {
         var res = new BybitHistoryApi()
-            .Download(Category, brokerageSymbol, request.StartTimeUtc, request.EndTimeUtc);
+            .Download(GetBybitProductCategory(request.Symbol), brokerageSymbol, request.StartTimeUtc, request.EndTimeUtc);
 
         foreach (var tick in res)
         {
@@ -376,8 +431,8 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
         var client = ApiClient ?? GetApiClient(_symbolMapper, null,
             Config.Get("bybit-api-url", "https://api.bybit.com"), null, null, BybitVIPLevel.VIP0);
 
-        var kLines = client.Market
-            .GetKLines(Category, brokerageSymbol, request.Resolution, request.StartTimeUtc, request.EndTimeUtc);
+        var kLines = client.Market.GetKLines(GetBybitProductCategory(request.Symbol), brokerageSymbol, request.Resolution,
+            request.StartTimeUtc, request.EndTimeUtc);
 
         var periodTimeSpan = request.Resolution.ToTimeSpan();
         foreach (var byBitKLine in kLines)
@@ -396,12 +451,12 @@ public partial class BybitBrokerage : BaseWebsocketsBrokerage, IDataQueueHandler
                 $"Only hourly and daily resolutions are supported for open interest history. No history returned"));
             yield break;
         }
-        
+
         var client = ApiClient ?? GetApiClient(_symbolMapper, null,
             Config.Get("bybit-api-url", "https://api.bybit.com"), null, null, BybitVIPLevel.VIP0);
-        var oiHistory = client.Market
-            .GetOpenInterest(Category, brokerageSymbol, request.Resolution, request.StartTimeUtc, request.EndTimeUtc);
-        
+        var oiHistory = client.Market.GetOpenInterest(GetBybitProductCategory(request.Symbol), brokerageSymbol, request.Resolution,
+            request.StartTimeUtc, request.EndTimeUtc);
+
         foreach (var oi in oiHistory)
         {
             yield return new OpenInterest(oi.Time, request.Symbol, oi.OpenInterest);

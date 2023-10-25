@@ -125,9 +125,8 @@ public partial class BybitBrokerage
                 continue;
             }
 
-
             var symbol = tradeUpdate.Symbol;
-            var leanSymbol = _symbolMapper.GetLeanSymbol(symbol, GetSupportedSecurityType(), MarketName);
+            var leanSymbol = _symbolMapper.GetLeanSymbol(symbol, GetSecurityType(tradeUpdate.Category), MarketName);
             var filledQuantity = Math.Abs(tradeUpdate.ExecutionQuantity);
 
             _remainingFillQuantity.TryGetValue(leanOrder.Id, out var accumulatedFilledQuantity);
@@ -145,12 +144,12 @@ public partial class BybitBrokerage
             var fee = OrderFee.Zero;
             if (tradeUpdate.ExecutionFee != 0)
             {
-                var currency = Category switch
+                var currency = tradeUpdate.Category switch
                 {
                     BybitProductCategory.Linear => "USDT",
                     BybitProductCategory.Inverse => GetBaseCurrency(symbol),
                     BybitProductCategory.Spot => GetSpotFeeCurrency(leanSymbol, tradeUpdate),
-                    _ => throw new NotSupportedException($"category {Category} not implemented")
+                    _ => throw new NotSupportedException($"category {tradeUpdate.Category} not implemented")
                 };
                 fee = new OrderFee(new CashAmount(tradeUpdate.ExecutionFee, currency));
             }

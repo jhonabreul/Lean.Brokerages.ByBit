@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using QuantConnect.Brokerages;
 using QuantConnect.BybitBrokerage.Models;
 using QuantConnect.BybitBrokerage.Models.Enums;
@@ -153,10 +154,23 @@ public class BybitMarketApiEndpoint : BybitApiEndpoint
     /// <returns>The current ticker information</returns>
     public BybitTicker[] GetTickers(BybitProductCategory category, string ticker = null)
     {
-        var parameters =
-            ticker == null ? null : new KeyValuePair<string, string>[] { new("symbol", ticker) };
+        // TODO: Running an async task synchronously should be handled better, since this could lead to deadlocks.
+        //       See how RestSharp handles it: https://github.com/restsharp/RestSharp/blob/d99d49437af21688152b556f6d3661d2e739b824/src/RestSharp/AsyncHelpers.cs#L27
+        return GetTickersAsync(category, ticker).SynchronouslyAwaitTaskResult();
+    }
 
-        return ExecuteGetRequest<BybitPageResult<BybitTicker>>("/market/tickers", category, parameters).List;
+    /// <summary>
+    /// Asynchronous query for the latest price snapshot, best bid/ask price, and trading volume in the last 24 hours.
+    /// </summary>
+    /// <param name="category">The product category</param>
+    /// <param name="ticker">The ticker to query for</param>
+    /// <returns>The current ticker information</returns>
+    public async Task<BybitTicker[]> GetTickersAsync(BybitProductCategory category, string ticker = null)
+    {
+        var parameters = ticker == null ? null : new KeyValuePair<string, string>[] { new("symbol", ticker) };
+        var result = await ExecuteGetRequestAsync<BybitPageResult<BybitTicker>>("/market/tickers", category, parameters);
+
+        return result.List;
     }
 
     /// <summary>

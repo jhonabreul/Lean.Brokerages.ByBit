@@ -15,6 +15,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using QuantConnect.Brokerages;
 using QuantConnect.BybitBrokerage.Models;
 using QuantConnect.BybitBrokerage.Models.Enums;
@@ -54,5 +56,25 @@ public class BybitPositionApiEndpoint : BybitApiEndpoint
             new("settleCoin", "USDT")
         };
         return FetchAll<BybitPositionInfo>("/position/list", category, 200, parameters, true);
+    }
+
+    /// <summary>
+    /// Asynchronously query real-time position data, such as position size, cumulative realizedPNL.
+    /// </summary>
+    /// <param name="category">The product category</param>
+    /// <returns>A list of all open positions in the current category</returns>
+    public async IAsyncEnumerable<BybitPositionInfo> GetPositionsAsync(BybitProductCategory category)
+    {
+        if (category == BybitProductCategory.Spot) yield break;
+
+        var parameters = new KeyValuePair<string, string>[]
+        {
+            new("settleCoin", "USDT")
+        };
+
+        await foreach (var position in FetchAllAsync<BybitPositionInfo>("/position/list", category, 200, parameters, true))
+        {
+            yield return position;
+        }
     }
 }

@@ -28,7 +28,7 @@ public class BybitTicker
     /// Symbol name
     /// </summary>
     public string Symbol { get; set; }
-    
+
 
     /// <summary>
     /// Percentage change of market price relative to 24h
